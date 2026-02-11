@@ -16,16 +16,18 @@ This reference client demonstrates the full integration flow:
 The demo runs as a web application. You fill in your credentials, paste a meeting URL, and click Start. Events stream in live as the meeting progresses.
 
 ```
-┌──────────────────────┐         ┌──────────────────────┐
-│  This Client         │         │  Sasha Server        │
-│                      │         │                      │
-│  Browser form ──────────POST──►  /api/v1/meetings/*   │
-│                      │         │                      │
-│  Express :4000  ◄──────POST────  Callback events      │
-│  /events        SSE   │  HMAC  │  (signed with HMAC)  │
-│       ↓              │         │                      │
-│  Browser event feed  │         │                      │
-└──────────────────────┘         └──────────────────────┘
+  This Client                        Sasha Server
+  ============                       =============
+
+  Browser form  ---POST /start--->   Join meeting &
+                                     start transcribing
+
+  Express :4000 <--POST /events---   Callback events
+  (verify HMAC)     (signed)         (transcript, status,
+       |                              insights, participants)
+       v
+  Browser (SSE)
+  live event feed
 ```
 
 ## Quick Start with AI (Recommended)
@@ -243,19 +245,19 @@ Every callback is an HTTP POST with a JSON body:
 This demo displays events in a browser — a real application would persist them to a database. Here's how that architecture looks:
 
 ```
-┌──────────────────┐         ┌──────────────────────────┐       ┌──────────────────┐
-│  Sasha Server    │         │  Your Application        │       │  Database        │
-│                  │  HTTP   │                          │       │                  │
-│  Meeting bot ────────POST──►  POST /webhook           │       │  meetings        │
-│  transcribes     │  events │    ├─ Verify HMAC ──────────INSERT─►  meeting_id    │
-│  live audio      │  (with  │    ├─ Parse event        │       │    title         │
-│                  │  HMAC)  │    └─ Save to database ─────INSERT─►  status, ...   │
-│                  │         │                          │       │                  │
-│                  │         │  Your frontend / API     │       │  segments        │
-│                  │         │    ├─ GET /meetings ◄────────SELECT─  speaker        │
-│                  │         │    ├─ GET /search   ◄────────SEARCH─  text           │
-│                  │         │    └─ GET /transcript◄───────SELECT─  timestamp      │
-└──────────────────┘         └──────────────────────────┘       └──────────────────┘
+  Sasha Server          Your Application           Database
+  =============         ================           =========
+
+  Meeting bot           POST /webhook
+  transcribes  --POST-->  Verify HMAC
+  live audio    events    Parse event  --INSERT-->  meetings
+                (HMAC     Save to DB   --INSERT-->    meeting_id
+                signed)                               title, status
+                                                      started_at
+                          Your API
+                          GET /meetings <--SELECT--  segments
+                          GET /search   <--SEARCH--    speaker, text
+                          GET /transcript<--SELECT--   timestamp
 ```
 
 ### Suggested Database Schema
