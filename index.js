@@ -1009,20 +1009,46 @@ The repo is at: https://github.com/context-is-everything/sasha-meeting-api-clien
             them to a database so you can search, summarise, and build on top of your
             meeting data. Here's how that architecture looks:
           </p>
-          <pre style="font-size:0.75rem;line-height:1.5">
-┌──────────────────┐       ┌─────────────────────────┐     ┌──────────────────┐
-│  Sasha Server    │       │  Your Application       │     │  Database        │
-│                  │ HTTP  │                         │     │                  │
-│  Meeting bot  ──────POST──► POST /webhook          │     │  meetings        │
-│  transcribes     │ events│   ├─ Verify HMAC  ─────────INSERT► meeting_id   │
-│  live audio      │ (with │   ├─ Parse event        │     │   title, status  │
-│                  │ HMAC) │   └─ Save to DB  ──────────INSERT► started_at   │
-│                  │       │                         │     │                  │
-│                  │       │  Your frontend / API    │     │  segments        │
-│                  │       │   ├─ GET /meetings ◄───────SELECT─ speaker      │
-│                  │       │   ├─ GET /search   ◄───────SEARCH─ text         │
-│                  │       │   └─ GET /transcript◄──────SELECT─ timestamp    │
-└──────────────────┘       └─────────────────────────┘     └──────────────────┘</pre>
+          <div style="display:flex;gap:0.5rem;align-items:stretch;margin:1rem 0;font-size:0.82rem;font-family:'SF Mono','Fira Code',monospace">
+            <div style="flex:1;border:2px solid #6366f1;border-radius:8px;padding:0.75rem;background:#f5f3ff">
+              <div style="font-weight:700;color:#4338ca;margin-bottom:0.5rem;text-align:center">Sasha Server</div>
+              <div style="color:#4b5563;font-size:0.78rem;line-height:1.5">
+                Meeting bot joins<br>the call and<br>transcribes live audio
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:0.25rem;min-width:40px;font-size:0.7rem;color:#6b7280;text-align:center">
+              <div>POST<br>events<br>&#x2192;</div>
+              <div style="font-size:0.65rem;color:#9ca3af">(HMAC<br>signed)</div>
+            </div>
+            <div style="flex:1.3;border:2px solid #059669;border-radius:8px;padding:0.75rem;background:#ecfdf5">
+              <div style="font-weight:700;color:#047857;margin-bottom:0.5rem;text-align:center">Your Application</div>
+              <div style="color:#4b5563;font-size:0.78rem;line-height:1.6">
+                <strong>POST /webhook</strong><br>
+                &nbsp; Verify HMAC &#x2192; INSERT<br>
+                &nbsp; Parse event &#x2192; INSERT<br>
+                <br>
+                <strong>GET /meetings</strong> &#x2190; SELECT<br>
+                <strong>GET /search</strong> &#x2190; SEARCH<br>
+                <strong>GET /transcript</strong> &#x2190; SELECT
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:0.25rem;min-width:30px;font-size:0.7rem;color:#6b7280;text-align:center">
+              <div>&#x2194;</div>
+            </div>
+            <div style="flex:1;border:2px solid #d97706;border-radius:8px;padding:0.75rem;background:#fffbeb">
+              <div style="font-weight:700;color:#b45309;margin-bottom:0.5rem;text-align:center">Database</div>
+              <div style="color:#4b5563;font-size:0.78rem;line-height:1.6">
+                <strong>meetings</strong><br>
+                &nbsp; meeting_id<br>
+                &nbsp; title, status<br>
+                &nbsp; started_at<br>
+                <br>
+                <strong>segments</strong><br>
+                &nbsp; speaker, text<br>
+                &nbsp; timestamp
+              </div>
+            </div>
+          </div>
 
           <h3>Suggested database schema</h3>
           <p>Two tables cover most use cases — one for meetings, one for transcript segments:</p>
