@@ -7,7 +7,7 @@
  * It serves a web interface where you can:
  *
  *   1. Enter your Sasha credentials and a meeting URL
- *   2. Start a live meeting transcription via the REST API
+ *   2. Join a live meeting and transcribe via the REST API
  *   3. Watch real-time callback events stream in as Sasha delivers them
  *   4. Verify HMAC signatures on every incoming event
  *
@@ -81,11 +81,12 @@ function verifySignature(body, signature, secret) {
 
 const app = express();
 
-// JSON parsing for proxy endpoints
-app.use(express.json());
-
-// Raw body parsing for callback endpoint (needed for HMAC verification)
+// Raw body parsing for callback endpoint — must come BEFORE express.json()
+// so the /events route gets the raw Buffer for HMAC signature verification.
 app.use('/events', express.raw({ type: 'application/json' }));
+
+// JSON parsing for all other endpoints (proxy routes, etc.)
+app.use(express.json());
 
 // ── SSE: Stream events to browser ───────────────────────────────────────────
 
@@ -247,7 +248,7 @@ async function safeResponseJson(response, sashaUrl) {
  * which then forwards to Sasha with the API key.
  */
 
-/** POST /proxy/start — Start a meeting */
+/** POST /proxy/start — Join an existing meeting */
 app.post('/proxy/start', async (req, res) => {
   const { sashaUrl, apiKey, meetingUrl, title, callbackUrl, signingSecret } = req.body;
 
@@ -263,7 +264,7 @@ app.post('/proxy/start', async (req, res) => {
     return res.status(400).json({ error: 'No API key provided. Enter your API key from Sasha Studio (My Account > API Tokens).' });
   }
   if (!meetingUrl) {
-    return res.status(400).json({ error: 'No meeting URL provided. Paste a Teams or Google Meet URL to start transcribing.' });
+    return res.status(400).json({ error: 'No meeting URL provided. Paste a Teams or Google Meet link for the meeting you want to join.' });
   }
 
   const effectiveCallbackUrl = callbackUrl || config.callbackUrl || `http://localhost:${PORT}/events`;
@@ -300,7 +301,7 @@ app.post('/proxy/start', async (req, res) => {
 app.post('/proxy/stop', async (req, res) => {
   const meetingId = req.body.meetingId || currentMeetingId;
   if (!meetingId) {
-    return res.status(400).json({ error: 'No active meeting to stop. Start a meeting first.' });
+    return res.status(400).json({ error: 'No active meeting to leave. Join a meeting first.' });
   }
 
   let response;
@@ -737,14 +738,14 @@ const HTML_PAGE = `<!DOCTYPE html>
       <p>
         This demo shows how to integrate with the
         <a href="https://sasha-studio.context-is-everything.com/" target="_blank">Sasha Studio</a>
-        Meeting Room API. Enter your credentials, start a meeting, and watch
+        Meeting Room API. Enter your credentials, join an existing meeting, and watch
         live transcription events arrive via callbacks.
       </p>
     </header>
 
     <div class="info-box">
       <strong>How this works:</strong>
-      Your browser submits API calls to Sasha to start and stop meetings.
+      Your browser submits API calls to Sasha to join and leave meetings.
       Sasha then POSTs real-time events (transcription segments, participant changes,
       coaching insights) back to this server's <code>/events</code> endpoint.
       Those events are streamed to your browser via Server-Sent Events so you can
@@ -780,9 +781,10 @@ const HTML_PAGE = `<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Start Meeting -->
+    <!-- Join Meeting -->
     <div class="card">
-      <h2>2. Start a Meeting</h2>
+      <h2>2. Join a Meeting</h2>
+      <p style="margin:-0.25rem 0 1rem;color:#64748b;font-size:0.9rem;">Paste the link to an existing Teams or Google Meet call. Sasha will join as a bot participant and transcribe the conversation.</p>
       <div class="form-row">
         <div class="form-group" style="flex:2">
           <label for="meeting-url">Meeting URL</label>
@@ -794,8 +796,8 @@ const HTML_PAGE = `<!DOCTYPE html>
         </div>
       </div>
       <div class="btn-row">
-        <button class="btn-start" id="btn-start" onclick="startMeeting()">Start Meeting</button>
-        <button class="btn-stop" id="btn-stop" onclick="stopMeeting()" disabled>Stop Meeting</button>
+        <button class="btn-start" id="btn-start" onclick="startMeeting()">Join Meeting</button>
+        <button class="btn-stop" id="btn-stop" onclick="stopMeeting()" disabled>Leave Meeting</button>
         <button class="btn-secondary" id="btn-status" onclick="checkStatus()">Check Status</button>
         <button class="btn-secondary" id="btn-clear" onclick="clearFeed()">Clear Events</button>
       </div>
@@ -817,7 +819,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       <div id="event-feed">
         <div class="empty-state" id="empty-state">
           <p>No events yet</p>
-          <p>Start a meeting above and events will appear here in real time</p>
+          <p>Join a meeting above and events will appear here in real time</p>
         </div>
       </div>
     </div>
@@ -827,12 +829,16 @@ const HTML_PAGE = `<!DOCTYPE html>
       <h2>Setup Guide</h2>
 
       <details>
-        <summary>Need a callback URL? Set up ngrok (2 minutes)</summary>
+        <summary>Need a callback URL? Set up ngrok (5 steps)</summary>
         <div style="padding-top:0.5rem">
           <p>
-            When Sasha runs remotely (not on your local machine), it needs a way to send
-            events back to you. <strong>ngrok</strong> creates a public URL that tunnels
-            traffic to your computer.
+            <strong>What is ngrok?</strong> When Sasha runs on a remote server, it needs a way
+            to send live events back to your computer. ngrok creates a public URL that
+            forwards traffic through a secure tunnel to a program running on your machine.
+          </p>
+          <p>
+            In this case, ngrok forwards Sasha's callback events to <em>this demo server</em>
+            running on your computer.
           </p>
 
           <h3>Step 1: Install ngrok</h3>
@@ -842,32 +848,46 @@ const HTML_PAGE = `<!DOCTYPE html>
 
           <h3>Step 2: Create a free account</h3>
           <p>
-            Sign up at <a href="https://dashboard.ngrok.com/signup" target="_blank" style="color:#4361ee">dashboard.ngrok.com</a>,
-            then copy your auth token and run:
+            Sign up at <a href="https://dashboard.ngrok.com/signup" target="_blank" style="color:#4361ee">dashboard.ngrok.com</a>.
+            On the dashboard, copy your <strong>auth token</strong> and run:
           </p>
           <pre>ngrok config add-authtoken YOUR_TOKEN_HERE</pre>
 
-          <h3>Step 3: Get a free static domain</h3>
+          <h3>Step 3: Claim a free static domain</h3>
           <p>
             In the ngrok dashboard, go to <strong>Cloud Edge &gt; Domains</strong> and claim a
             free static domain (e.g. <code>your-name.ngrok-free.app</code>).
-            This stays the same every time you restart ngrok.
+            This domain stays the same forever, so you only need to do this once.
           </p>
 
           <h3>Step 4: Start the tunnel</h3>
           <pre>ngrok http --domain your-name.ngrok-free.app 4000</pre>
           <p>Replace <code>your-name.ngrok-free.app</code> with the domain you claimed.</p>
+          <div class="tip" style="margin-top:0.5rem">
+            <strong>Important — the port number must match!</strong>
+            The number at the end (<code>4000</code>) tells ngrok which program on your
+            computer should receive the traffic. This demo server listens on port
+            <strong>4000</strong> by default, so ngrok must forward to <strong>4000</strong>.
+            <br><br>
+            If they don't match, you'll see events fail with <strong>502 Bad Gateway</strong>
+            because ngrok is sending traffic to a port where nothing is listening.
+            <br><br>
+            <strong>How to check:</strong> When this demo server starts, it prints
+            <code>Web UI: http://localhost:4000</code> — the number after <code>localhost:</code>
+            is the port ngrok needs. If you changed the port using the <code>CALLBACK_PORT</code>
+            environment variable, use that same number in the ngrok command.
+          </div>
 
           <h3>Step 5: Enter the callback URL above</h3>
           <p>
-            In the <strong>Callback URL</strong> field above, enter:
+            In the <strong>Callback URL</strong> field on this page, enter your ngrok domain
+            with <code>/events</code> on the end:
           </p>
           <pre>https://your-name.ngrok-free.app/events</pre>
-
-          <div class="tip">
-            <strong>Tip:</strong> Use a static domain so you don't have to update the URL
-            every time you restart ngrok. Free accounts get one static domain.
-          </div>
+          <p>
+            That's it. Sasha will now POST events to your ngrok URL, ngrok will forward
+            them to this server, and you'll see them appear in the Live Event Feed above.
+          </p>
         </div>
       </details>
 
@@ -907,7 +927,11 @@ const HTML_PAGE = `<!DOCTYPE html>
             </tr>
             <tr style="border-bottom:1px solid #e5e7eb">
               <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">No events arriving</td>
-              <td style="padding:0.5rem 0">Sasha can't reach your callback URL. If running remotely, set up ngrok (see above) and enter the public URL.</td>
+              <td style="padding:0.5rem 0">Sasha can't reach your callback URL. Check: <strong>(1)</strong> Is ngrok running? <strong>(2)</strong> Is the ngrok port set to <strong>4000</strong> (or whatever port this server is using)? <strong>(3)</strong> Did you enter the full callback URL including <code>/events</code> at the end?</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb">
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">502 Bad Gateway</td>
+              <td style="padding:0.5rem 0">ngrok is running but forwarding to the wrong port. The port in your ngrok command must match this server's port (default: 4000). Restart ngrok with: <code>ngrok http --domain your-domain 4000</code></td>
             </tr>
             <tr>
               <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">Events show "no secret"</td>
@@ -1006,7 +1030,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       });
 
       document.getElementById('btn-start').disabled = true;
-      setStatus('active', 'Starting meeting...');
+      setStatus('active', 'Joining meeting...');
 
       try {
         const res = await fetch('/proxy/start', {
@@ -1020,7 +1044,7 @@ const HTML_PAGE = `<!DOCTYPE html>
         if (!res.ok) {
           setStatus('error', 'Error: ' + (data.error || res.statusText));
           document.getElementById('btn-start').disabled = false;
-          addErrorEvent('Start failed: ' + (data.error || res.statusText));
+          addErrorEvent('Join failed: ' + (data.error || res.statusText));
           return;
         }
 
@@ -1031,7 +1055,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 
         addEvent({
           type: 'api_response',
-          payload: { action: 'Meeting started', meetingId: data.meetingId, platform: data.platform },
+          payload: { action: 'Joining meeting', meetingId: data.meetingId, platform: data.platform },
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
@@ -1201,7 +1225,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       const p1 = document.createElement('p');
       p1.textContent = 'No events yet';
       const p2 = document.createElement('p');
-      p2.textContent = 'Start a meeting above and events will appear here in real time';
+      p2.textContent = 'Join a meeting above and events will appear here in real time';
       empty.appendChild(p1);
       empty.appendChild(p2);
       feed.appendChild(empty);
