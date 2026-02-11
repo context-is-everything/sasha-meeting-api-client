@@ -1460,7 +1460,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
     function copyPrompt() {
       const box = document.getElementById('ai-prompt');
       // Get text content, excluding the Copy button text
-      const text = box.textContent.replace(/^Copy\n?/, '').trim();
+      const text = box.textContent.replace(/^Copy\\n?/, '').trim();
       navigator.clipboard.writeText(text).then(() => {
         const btn = box.querySelector('.copy-btn');
         btn.textContent = 'Copied!';
