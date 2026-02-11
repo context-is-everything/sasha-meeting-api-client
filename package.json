@@ -1,17 +1,16 @@
 {
   "name": "sasha-meeting-api-client",
   "version": "1.0.0",
-  "description": "Reference client and test harness for the Sasha Meeting Room API",
+  "description": "Reference client for the Sasha Meeting Room API — web UI demo with live callback events",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["sasha", "meeting", "transcription", "api", "webhooks"],
+  "keywords": ["sasha", "meeting", "transcription", "api", "webhooks", "callbacks"],
   "author": "Context is Everything",
   "license": "MIT",
   "dependencies": {
-    "chalk": "^5.3.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.0"
   }

@@ -1,16 +1,31 @@
 # Sasha Meeting Room API — Reference Client
 
-Official reference implementation for the [Sasha Studio](https://github.com/context-is-everything/sasha-ai-knowledge-management) Meeting Room API. Start meetings, receive live transcription events, and verify webhook signatures.
+This is the official reference implementation for the [Sasha Studio](https://sasha-studio.context-is-everything.com/) Meeting Room API.
+
+## What This Demo Shows
+
+The Sasha Meeting Room API lets external applications start and stop live meeting transcriptions via simple REST calls. When a meeting is active, Sasha sends real-time events to your application's callback URL — transcription segments, participant changes, coaching insights, and status updates.
+
+This reference client demonstrates the full integration flow:
+
+1. **Making API calls** — Authenticate with your API key and call `POST /api/v1/meetings/start` to begin transcribing a meeting
+2. **Receiving callbacks** — Sasha POSTs events to your registered callback URL as they happen during the meeting
+3. **Verifying signatures** — Every callback includes an HMAC-SHA256 signature so you can confirm it came from Sasha
+4. **Handling event types** — Different event types (transcript segments, status changes, insights) are displayed with appropriate formatting
+
+The demo runs as a web application. You fill in your credentials, paste a meeting URL, and click Start. Events stream in live as the meeting progresses.
 
 ```
-┌──────────────────┐         ┌──────────────────────┐
-│  This Client     │         │  Sasha Server        │
-│                  │         │                      │
-│  CLI commands ──────POST──►  /api/v1/meetings/*   │
-│                  │         │                      │
-│  Express :4000 ◄──POST─────  Callback events      │
-│  /events         │  HMAC   │  (signed with HMAC)  │
-└──────────────────┘         └──────────────────────┘
+┌──────────────────────┐         ┌──────────────────────┐
+│  This Client         │         │  Sasha Server        │
+│                      │         │                      │
+│  Browser form ──────────POST──►  /api/v1/meetings/*   │
+│                      │         │                      │
+│  Express :4000  ◄──────POST────  Callback events      │
+│  /events        SSE   │  HMAC  │  (signed with HMAC)  │
+│       ↓              │         │                      │
+│  Browser event feed  │         │                      │
+└──────────────────────┘         └──────────────────────┘
 ```
 
 ## Quick Start
@@ -19,36 +34,35 @@ Official reference implementation for the [Sasha Studio](https://github.com/cont
 git clone https://github.com/context-is-everything/sasha-meeting-api-client.git
 cd sasha-meeting-api-client
 npm install
-cp .env.example .env    # Edit with your SASHA_URL, API_KEY, SIGNING_SECRET
+cp .env.example .env    # Optional — you can enter credentials in the web UI
 node index.js
 ```
 
-Then use the interactive prompt:
+Open **http://localhost:4000** in your browser. You'll see a form to enter your Sasha URL, API key, and a meeting URL. Click **Start Meeting** and watch events appear in the live feed as the meeting progresses.
 
-```
-> start https://teams.live.com/meet/abc123 "Daily Standup"
-  Meeting started: meeting_17234... (teams)
-  [STATUS] #1 Meeting meeting_17234... -> joining HMAC OK
-  [STATUS] #2 Meeting meeting_17234... -> live HMAC OK
-  [SEGMENT] #3 Alice: So about the roadmap for Q2... HMAC OK
-  [INSIGHT] #7 coverage_gap: No one has mentioned the budget yet HMAC OK
-  [PARTICIPANT] #8 Bob joined HMAC OK
-> stop
-  Meeting meeting_17234... -> stopping
-  [STATUS] #12 Meeting meeting_17234... -> ended HMAC OK
-```
+## How It Works
+
+The application is a small Express server (`index.js`, ~300 lines) that does three things:
+
+1. **Serves a web UI** at `http://localhost:4000` — form inputs for your credentials and meeting URL, with a live event feed below
+
+2. **Receives callbacks** at `POST /events` — this is the URL you register with Sasha when starting a meeting. Sasha sends HTTP POST requests here for every event (transcript segments, status changes, participant updates, coaching insights)
+
+3. **Streams events to the browser** via Server-Sent Events (SSE) — every callback received from Sasha is immediately forwarded to the browser so you can see events arrive in real time
+
+The browser never talks directly to the Sasha API. Instead, it calls local proxy endpoints (`/proxy/start`, `/proxy/stop`, `/proxy/status`) which forward requests to Sasha with the API key. This avoids CORS issues and keeps your API key out of the browser.
 
 ## Configuration
 
-Create a `.env` file (see `.env.example`):
+You can configure the client either through `.env` (see `.env.example`) or by filling in the form fields in the web UI. Form values take priority.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SASHA_URL` | Yes | `http://localhost:3005` | Your Sasha Studio URL |
+| `SASHA_URL` | Yes | — | Your Sasha Studio URL |
 | `API_KEY` | Yes | — | API key from My Account > API Tokens |
 | `SIGNING_SECRET` | No | — | For HMAC signature verification |
-| `CALLBACK_PORT` | No | `4000` | Local port for receiving events |
-| `CALLBACK_URL` | No | `http://localhost:{port}/events` | Override callback URL (for ngrok) |
+| `CALLBACK_PORT` | No | `4000` | Local port for the web UI and callback receiver |
+| `CALLBACK_URL` | No | `http://localhost:{port}/events` | Override callback URL (for ngrok, see below) |
 
 ## API Reference
 
@@ -149,19 +163,21 @@ Every request to `/api/v1/*` must include your API key:
 
 ```bash
 # Via X-API-Key header (recommended)
-curl -H "X-API-Key: sk_your_key" https://sasha.example.com/api/v1/meetings/status
+curl -H "X-API-Key: sk_your_key" https://your-sasha.example.com/api/v1/meetings/status
 
 # Via Authorization header
-curl -H "Authorization: Bearer sk_your_key" https://sasha.example.com/api/v1/meetings/status
+curl -H "Authorization: Bearer sk_your_key" https://your-sasha.example.com/api/v1/meetings/status
 ```
 
 Create API keys in Sasha Studio: **My Account > API Tokens**.
 
 ## Callback Events
 
-When you provide a `callbackUrl`, Sasha POSTs events as they happen.
+When you provide a `callbackUrl`, Sasha POSTs events as they happen during the meeting. This is the core of the integration — your application receives live data without polling.
 
 ### Event Format
+
+Every callback is an HTTP POST with a JSON body:
 
 ```json
 {
@@ -199,7 +215,7 @@ When you provide a `callbackUrl`, Sasha POSTs events as they happen.
 
 ## HMAC Signature Verification
 
-Every callback includes an `X-Sasha-Signature` header. Verify it to ensure the event came from Sasha.
+Every callback includes an `X-Sasha-Signature` header. Verify it to ensure the event came from Sasha and hasn't been tampered with.
 
 ### Node.js
 
@@ -245,9 +261,9 @@ def verify_signature(body: bytes, signature: str, secret: str) -> bool:
     return hmac.compare_digest(signature, expected)
 ```
 
-## Local Development with ngrok
+## Connecting to a Remote Sasha Instance
 
-When Sasha runs remotely (e.g., on Sliplane), your callback URL needs to be publicly reachable.
+When Sasha runs remotely (e.g., on Sliplane), callback events need a way to reach your local machine. Use [ngrok](https://ngrok.com/) to create a public tunnel.
 
 ### Setup
 
@@ -268,7 +284,7 @@ When Sasha runs remotely (e.g., on Sliplane), your callback URL needs to be publ
    ngrok http --domain your-name.ngrok-free.app 4000
    ```
 
-4. **Set your `.env`:**
+4. **Set your `.env`** or enter in the web UI:
    ```bash
    CALLBACK_URL=https://your-name.ngrok-free.app/events
    ```
@@ -278,20 +294,19 @@ When Sasha runs remotely (e.g., on Sliplane), your callback URL needs to be publ
    node index.js
    ```
 
-Events from Sasha flow through ngrok to your local machine.
+Events from Sasha flow through ngrok to your local machine and appear in the browser's live event feed.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| `Missing API_KEY` | Copy `.env.example` to `.env` and add your key |
 | `401 Invalid API key` | Check the key hasn't been revoked in Sasha Studio |
 | `HMAC FAIL` on events | Ensure `SIGNING_SECRET` matches the secret shown when creating the API key |
 | No events arriving | Check your `CALLBACK_URL` is reachable from Sasha's network |
 | `ECONNREFUSED` | Verify `SASHA_URL` is correct and Sasha is running |
-| Events arrive but HMAC shows `no secret` | Set `SIGNING_SECRET` in `.env` |
+| Events arrive but show `no secret` | Set `SIGNING_SECRET` in `.env` or the web UI |
 
 ## Links
 
-- [Sasha Studio](https://github.com/context-is-everything/sasha-ai-knowledge-management) — the AI knowledge management platform
+- [Sasha Studio](https://sasha-studio.context-is-everything.com/) — the AI knowledge management platform
 - [Context is Everything](https://contextiseverything.co.uk) — the company behind Sasha
