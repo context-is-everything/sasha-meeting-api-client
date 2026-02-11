@@ -164,6 +164,81 @@ app.post('/events', (req, res) => {
   res.status(200).json({ received: true });
 });
 
+// ── Error Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Turn a raw fetch/network error into a human-readable message with guidance.
+ */
+function friendlyError(err, sashaUrl) {
+  const msg = err.message || '';
+  const code = err.code || err.cause?.code || '';
+
+  if (!sashaUrl) {
+    return 'No Sasha URL provided. Enter your Sasha Studio URL in the form above.';
+  }
+
+  if (code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED')) {
+    return `Could not connect to ${sashaUrl} — the server refused the connection. Check that Sasha Studio is running and the URL is correct.`;
+  }
+
+  if (code === 'ENOTFOUND' || msg.includes('ENOTFOUND') || msg.includes('getaddrinfo')) {
+    const host = new URL(sashaUrl).hostname;
+    return `Could not resolve hostname "${host}". Check that the Sasha URL is spelled correctly.`;
+  }
+
+  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || msg.includes('ETIMEDOUT')) {
+    return `Connection to ${sashaUrl} timed out. The server may be down or unreachable from your network.`;
+  }
+
+  if (code === 'ECONNRESET' || msg.includes('ECONNRESET')) {
+    return `Connection to ${sashaUrl} was reset. The server may have closed the connection unexpectedly.`;
+  }
+
+  if (code === 'CERT_HAS_EXPIRED' || msg.includes('certificate') || msg.includes('SSL') || msg.includes('UNABLE_TO_VERIFY')) {
+    return `SSL/TLS error connecting to ${sashaUrl}. The server's certificate may be invalid or expired.`;
+  }
+
+  if (msg.includes('fetch failed') || msg.includes('Failed to fetch')) {
+    return `Could not reach ${sashaUrl}. Check that the URL is correct and the server is running.`;
+  }
+
+  if (msg.includes('Invalid URL') || msg.includes('ERR_INVALID_URL')) {
+    return `"${sashaUrl}" is not a valid URL. It should look like https://your-instance.sliplane.app`;
+  }
+
+  return `Could not connect to Sasha: ${msg}`;
+}
+
+/**
+ * Safely parse a response as JSON, with a fallback for non-JSON error pages.
+ */
+async function safeResponseJson(response, sashaUrl) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.json();
+    } catch {
+      // Fall through to text handling
+    }
+  }
+
+  // Non-JSON response — build a helpful error from the HTTP status
+  const statusMessages = {
+    400: 'Bad request — check the meeting URL format.',
+    401: 'Invalid API key. Check that your key is correct and hasn\'t been revoked in Sasha Studio (My Account > API Tokens).',
+    403: 'Access denied. Your API key may not have permission for this action.',
+    404: `Endpoint not found at ${sashaUrl}. Check that the Sasha URL is correct and includes the right path. The API expects endpoints like /api/v1/meetings/start.`,
+    429: 'Too many requests. Wait a moment and try again.',
+    500: 'Sasha server error. The server encountered an internal problem — try again in a moment.',
+    502: 'Bad gateway — Sasha may be restarting. Try again in a few seconds.',
+    503: 'Sasha is temporarily unavailable. The server may be starting up or under maintenance.',
+  };
+
+  const hint = statusMessages[response.status] || `Unexpected response (HTTP ${response.status}).`;
+  return { error: hint };
+}
+
 // ── Proxy Endpoints ─────────────────────────────────────────────────────────
 
 /**
@@ -181,10 +256,21 @@ app.post('/proxy/start', async (req, res) => {
   if (apiKey) config.apiKey = apiKey;
   if (signingSecret !== undefined) config.signingSecret = signingSecret;
 
+  if (!config.sashaUrl) {
+    return res.status(400).json({ error: 'No Sasha URL provided. Enter your Sasha Studio URL in the form above.' });
+  }
+  if (!config.apiKey) {
+    return res.status(400).json({ error: 'No API key provided. Enter your API key from Sasha Studio (My Account > API Tokens).' });
+  }
+  if (!meetingUrl) {
+    return res.status(400).json({ error: 'No meeting URL provided. Paste a Teams or Google Meet URL to start transcribing.' });
+  }
+
   const effectiveCallbackUrl = callbackUrl || config.callbackUrl || `http://localhost:${PORT}/events`;
 
+  let response;
   try {
-    const response = await fetch(`${config.sashaUrl}/api/v1/meetings/start`, {
+    response = await fetch(`${config.sashaUrl}/api/v1/meetings/start`, {
       method: 'POST',
       headers: {
         'X-API-Key': config.apiKey,
@@ -196,29 +282,30 @@ app.post('/proxy/start', async (req, res) => {
         callbackUrl: effectiveCallbackUrl,
       }),
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
-
-    currentMeetingId = data.meetingId;
-    broadcastSSE({ type: 'api_response', action: 'start', data });
-    res.json(data);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    return res.status(502).json({ error: friendlyError(err, config.sashaUrl) });
   }
+
+  const data = await safeResponseJson(response, config.sashaUrl);
+  if (!response.ok) {
+    return res.status(response.status).json(data);
+  }
+
+  currentMeetingId = data.meetingId;
+  broadcastSSE({ type: 'api_response', action: 'start', data });
+  res.json(data);
 });
 
 /** POST /proxy/stop — Stop a meeting */
 app.post('/proxy/stop', async (req, res) => {
   const meetingId = req.body.meetingId || currentMeetingId;
   if (!meetingId) {
-    return res.status(400).json({ error: 'No active meeting' });
+    return res.status(400).json({ error: 'No active meeting to stop. Start a meeting first.' });
   }
 
+  let response;
   try {
-    const response = await fetch(`${config.sashaUrl}/api/v1/meetings/stop`, {
+    response = await fetch(`${config.sashaUrl}/api/v1/meetings/stop`, {
       method: 'POST',
       headers: {
         'X-API-Key': config.apiKey,
@@ -226,55 +313,65 @@ app.post('/proxy/stop', async (req, res) => {
       },
       body: JSON.stringify({ meetingId }),
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
-
-    if (meetingId === currentMeetingId) currentMeetingId = null;
-    broadcastSSE({ type: 'api_response', action: 'stop', data });
-    res.json(data);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    return res.status(502).json({ error: friendlyError(err, config.sashaUrl) });
   }
+
+  const data = await safeResponseJson(response, config.sashaUrl);
+  if (!response.ok) {
+    return res.status(response.status).json(data);
+  }
+
+  if (meetingId === currentMeetingId) currentMeetingId = null;
+  broadcastSSE({ type: 'api_response', action: 'stop', data });
+  res.json(data);
 });
 
 /** GET /proxy/status — List active meetings */
 app.get('/proxy/status', async (req, res) => {
+  if (!config.sashaUrl) {
+    return res.status(400).json({ error: 'No Sasha URL configured. Enter your Sasha Studio URL first.' });
+  }
+
+  let response;
   try {
-    const response = await fetch(`${config.sashaUrl}/api/v1/meetings/status`, {
+    response = await fetch(`${config.sashaUrl}/api/v1/meetings/status`, {
       headers: { 'X-API-Key': config.apiKey },
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
-
-    res.json(data);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    return res.status(502).json({ error: friendlyError(err, config.sashaUrl) });
   }
+
+  const data = await safeResponseJson(response, config.sashaUrl);
+  if (!response.ok) {
+    return res.status(response.status).json(data);
+  }
+
+  res.json(data);
 });
 
 /** GET /proxy/transcript/:meetingId — Get transcript */
 app.get('/proxy/transcript/:meetingId', async (req, res) => {
+  if (!config.sashaUrl) {
+    return res.status(400).json({ error: 'No Sasha URL configured. Enter your Sasha Studio URL first.' });
+  }
+
+  let response;
   try {
-    const response = await fetch(
+    response = await fetch(
       `${config.sashaUrl}/api/v1/meetings/${req.params.meetingId}/transcript`,
       { headers: { 'X-API-Key': config.apiKey } }
     );
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
-
-    res.json(data);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    return res.status(502).json({ error: friendlyError(err, config.sashaUrl) });
   }
+
+  const data = await safeResponseJson(response, config.sashaUrl);
+  if (!response.ok) {
+    return res.status(response.status).json(data);
+  }
+
+  res.json(data);
 });
 
 // Health check
@@ -543,6 +640,84 @@ const HTML_PAGE = `<!DOCTYPE html>
       color: #666;
     }
 
+    /* Error events in feed */
+    .event-item.error-item {
+      background: #fef2f2;
+      border-left: 3px solid #ef4444;
+      border-bottom-color: #fecaca;
+    }
+
+    /* Setup guide */
+    .setup-guide {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .setup-guide h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      color: #1a1a2e;
+    }
+    .setup-guide h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.25rem 0 0.5rem;
+      color: #374151;
+    }
+    .setup-guide p {
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+      color: #4b5563;
+    }
+    .setup-guide ol {
+      padding-left: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .setup-guide li {
+      font-size: 0.9rem;
+      color: #4b5563;
+      margin-bottom: 0.5rem;
+      line-height: 1.5;
+    }
+    .setup-guide code {
+      background: #f3f4f6;
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+      font-size: 0.85em;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+    .setup-guide pre {
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      overflow-x: auto;
+      margin: 0.5rem 0 0.75rem;
+    }
+    .setup-guide .tip {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: #92400e;
+      margin: 0.75rem 0;
+    }
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #374151;
+      padding: 0.25rem 0;
+    }
+    details summary:hover { color: #4361ee; }
+
     footer {
       text-align: center;
       margin-top: 2rem;
@@ -647,6 +822,102 @@ const HTML_PAGE = `<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Setup Guides -->
+    <div class="setup-guide">
+      <h2>Setup Guide</h2>
+
+      <details>
+        <summary>Need a callback URL? Set up ngrok (2 minutes)</summary>
+        <div style="padding-top:0.5rem">
+          <p>
+            When Sasha runs remotely (not on your local machine), it needs a way to send
+            events back to you. <strong>ngrok</strong> creates a public URL that tunnels
+            traffic to your computer.
+          </p>
+
+          <h3>Step 1: Install ngrok</h3>
+          <p>On macOS:</p>
+          <pre>brew install ngrok</pre>
+          <p>On Windows or Linux, download from <a href="https://ngrok.com/download" target="_blank" style="color:#4361ee">ngrok.com/download</a>.</p>
+
+          <h3>Step 2: Create a free account</h3>
+          <p>
+            Sign up at <a href="https://dashboard.ngrok.com/signup" target="_blank" style="color:#4361ee">dashboard.ngrok.com</a>,
+            then copy your auth token and run:
+          </p>
+          <pre>ngrok config add-authtoken YOUR_TOKEN_HERE</pre>
+
+          <h3>Step 3: Get a free static domain</h3>
+          <p>
+            In the ngrok dashboard, go to <strong>Cloud Edge &gt; Domains</strong> and claim a
+            free static domain (e.g. <code>your-name.ngrok-free.app</code>).
+            This stays the same every time you restart ngrok.
+          </p>
+
+          <h3>Step 4: Start the tunnel</h3>
+          <pre>ngrok http --domain your-name.ngrok-free.app 4000</pre>
+          <p>Replace <code>your-name.ngrok-free.app</code> with the domain you claimed.</p>
+
+          <h3>Step 5: Enter the callback URL above</h3>
+          <p>
+            In the <strong>Callback URL</strong> field above, enter:
+          </p>
+          <pre>https://your-name.ngrok-free.app/events</pre>
+
+          <div class="tip">
+            <strong>Tip:</strong> Use a static domain so you don't have to update the URL
+            every time you restart ngrok. Free accounts get one static domain.
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:0.75rem">
+        <summary>Where do I find my API key and signing secret?</summary>
+        <div style="padding-top:0.5rem">
+          <ol>
+            <li>Log in to <a href="https://sasha-studio.context-is-everything.com/" target="_blank" style="color:#4361ee">Sasha Studio</a></li>
+            <li>Click your profile icon and go to <strong>My Account</strong></li>
+            <li>Select the <strong>API Tokens</strong> tab</li>
+            <li>Click <strong>Create Token</strong> and give it a name</li>
+            <li>Copy the <strong>API Key</strong> (starts with <code>sk_</code>) and the <strong>Signing Secret</strong> (starts with <code>ss_</code>)</li>
+          </ol>
+          <div class="tip">
+            <strong>Important:</strong> The API key and signing secret are only shown once
+            when you create the token. Copy them somewhere safe. If you lose them,
+            you'll need to create a new token.
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:0.75rem">
+        <summary>Common errors and how to fix them</summary>
+        <div style="padding-top:0.5rem">
+          <table style="width:100%;font-size:0.85rem;border-collapse:collapse">
+            <tr style="border-bottom:1px solid #e5e7eb">
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">Could not connect</td>
+              <td style="padding:0.5rem 0">Check that the Sasha URL is correct and the server is running. Try opening the URL in a new browser tab.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb">
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">401 Invalid API key</td>
+              <td style="padding:0.5rem 0">Your API key may be incorrect or revoked. Create a new one in Sasha Studio (My Account &gt; API Tokens).</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb">
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">HMAC FAIL</td>
+              <td style="padding:0.5rem 0">The signing secret doesn't match. Use the exact secret shown when you created the API token.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb">
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">No events arriving</td>
+              <td style="padding:0.5rem 0">Sasha can't reach your callback URL. If running remotely, set up ngrok (see above) and enter the public URL.</td>
+            </tr>
+            <tr>
+              <td style="padding:0.5rem 0.75rem 0.5rem 0;font-weight:600;white-space:nowrap;vertical-align:top">Events show "no secret"</td>
+              <td style="padding:0.5rem 0">Not an error — it just means you haven't entered a signing secret, so HMAC verification is skipped. Add your signing secret to enable it.</td>
+            </tr>
+          </table>
+        </div>
+      </details>
+    </div>
+
     <footer>
       <a href="https://sasha-studio.context-is-everything.com/" target="_blank">Sasha Studio</a>
       &middot;
@@ -712,8 +983,19 @@ const HTML_PAGE = `<!DOCTYPE html>
       const callbackUrl = document.getElementById('callback-url').value.trim();
       const signingSecret = document.getElementById('signing-secret').value.trim();
 
-      if (!sashaUrl || !apiKey || !meetingUrl) {
-        alert('Please fill in Sasha URL, API Key, and Meeting URL.');
+      if (!sashaUrl) {
+        addErrorEvent('Please enter your Sasha Studio URL (e.g. https://your-instance.sliplane.app).');
+        document.getElementById('sasha-url').focus();
+        return;
+      }
+      if (!apiKey) {
+        addErrorEvent('Please enter your API key. You can create one in Sasha Studio under My Account > API Tokens.');
+        document.getElementById('api-key').focus();
+        return;
+      }
+      if (!meetingUrl) {
+        addErrorEvent('Please enter a meeting URL (e.g. https://teams.live.com/meet/abc123).');
+        document.getElementById('meeting-url').focus();
         return;
       }
 
@@ -884,11 +1166,30 @@ const HTML_PAGE = `<!DOCTYPE html>
     }
 
     function addErrorEvent(message) {
-      addEvent({
-        type: 'error',
-        payload: { message: message },
-        timestamp: new Date().toISOString(),
-      });
+      const feed = document.getElementById('event-feed');
+      const empty = document.getElementById('empty-state');
+      if (empty) empty.remove();
+
+      const item = document.createElement('div');
+      item.className = 'event-item error-item';
+
+      const time = document.createElement('span');
+      time.className = 'event-time';
+      time.textContent = new Date().toLocaleTimeString();
+
+      const badge = document.createElement('span');
+      badge.className = 'event-badge error';
+      badge.textContent = 'Error';
+
+      const content = document.createElement('span');
+      content.className = 'event-content';
+      content.textContent = message;
+
+      item.appendChild(time);
+      item.appendChild(badge);
+      item.appendChild(content);
+      feed.appendChild(item);
+      feed.scrollTop = feed.scrollHeight;
     }
 
     function clearFeed() {
