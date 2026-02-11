@@ -648,6 +648,79 @@ const HTML_PAGE = `<!DOCTYPE html>
       border-bottom-color: #fecaca;
     }
 
+    /* AI setup prompt */
+    .ai-setup {
+      background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%);
+      border: 2px solid #4361ee;
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .ai-setup-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .ai-setup-header h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin: 0;
+    }
+    .ai-setup-badge {
+      background: #4361ee;
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .ai-setup p {
+      font-size: 0.88rem;
+      color: #4b5563;
+      margin: 0 0 0.75rem;
+      line-height: 1.5;
+    }
+    .ai-prompt-box {
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 1rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      line-height: 1.6;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      position: relative;
+      margin-bottom: 0.75rem;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: #374151;
+      color: #d1d5db;
+      border: 1px solid #4b5563;
+      border-radius: 5px;
+      padding: 0.3rem 0.6rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .copy-btn:hover {
+      background: #4b5563;
+      color: #fff;
+    }
+    .ai-setup .footnote {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin: 0;
+    }
+
     /* Setup guide */
     .setup-guide {
       background: #fff;
@@ -827,6 +900,43 @@ const HTML_PAGE = `<!DOCTYPE html>
     <!-- Setup Guides -->
     <div class="setup-guide">
       <h2>Setup Guide</h2>
+
+      <div class="ai-setup">
+        <div class="ai-setup-header">
+          <h3>Instant setup with AI</h3>
+          <span class="ai-setup-badge">Recommended</span>
+        </div>
+        <p>
+          Copy the prompt below and paste it into
+          <a href="https://claude.ai/code" target="_blank" style="color:#4361ee;font-weight:600">Claude Code</a>,
+          <a href="https://cursor.com" target="_blank" style="color:#4361ee;font-weight:600">Cursor</a>,
+          or any AI coding assistant. It will clone this project, install everything, and walk you through
+          connecting to Sasha — no manual setup required.
+        </p>
+        <div class="ai-prompt-box" id="ai-prompt">
+          <button class="copy-btn" onclick="copyPrompt()">Copy</button>
+Clone the Sasha Meeting Room API reference client and set it up so I can test live meeting transcription callbacks.
+
+Here's what to do:
+
+1. Clone: git clone https://github.com/context-is-everything/sasha-meeting-api-client.git
+2. cd into the directory and run: npm install
+3. Create a .env file from .env.example
+4. Ask me for my Sasha Studio URL and API key (I'll get these from My Account > API Tokens in Sasha Studio)
+5. Help me set up ngrok so Sasha can send callbacks to my machine:
+   - Install ngrok if I don't have it (brew install ngrok on macOS)
+   - Help me authenticate ngrok with my auth token
+   - Help me claim a free static domain from the ngrok dashboard
+   - Start the tunnel pointing to port 4000 (must match the server port)
+   - IMPORTANT: The ngrok port number MUST be 4000 to match the demo server
+6. Update .env with my Sasha URL, API key, signing secret, and ngrok callback URL
+7. Start the server with: node index.js
+8. Open http://localhost:4000 in my browser
+9. Walk me through joining a meeting and verifying that live transcription events appear
+
+The repo is at: https://github.com/context-is-everything/sasha-meeting-api-client</div>
+        <p class="footnote">Works with Claude Code, Cursor, Windsurf, Copilot, or any AI coding assistant that can run terminal commands.</p>
+      </div>
 
       <details>
         <summary>Need a callback URL? Set up ngrok (5 steps)</summary>
@@ -1214,6 +1324,17 @@ const HTML_PAGE = `<!DOCTYPE html>
       item.appendChild(content);
       feed.appendChild(item);
       feed.scrollTop = feed.scrollHeight;
+    }
+
+    function copyPrompt() {
+      const box = document.getElementById('ai-prompt');
+      // Get text content, excluding the Copy button text
+      const text = box.textContent.replace(/^Copy\n?/, '').trim();
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = box.querySelector('.copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+      });
     }
 
     function clearFeed() {

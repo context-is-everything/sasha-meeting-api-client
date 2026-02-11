@@ -28,7 +28,32 @@ The demo runs as a web application. You fill in your credentials, paste a meetin
 └──────────────────────┘         └──────────────────────┘
 ```
 
-## Quick Start
+## Quick Start with AI (Recommended)
+
+If you use [Claude Code](https://claude.ai/code), [Cursor](https://cursor.com), or any AI coding assistant, copy and paste this prompt — it will set up everything for you:
+
+> Clone the Sasha Meeting Room API reference client and set it up so I can test live meeting transcription callbacks.
+>
+> Here's what to do:
+>
+> 1. Clone: `git clone https://github.com/context-is-everything/sasha-meeting-api-client.git`
+> 2. cd into the directory and run: `npm install`
+> 3. Create a `.env` file from `.env.example`
+> 4. Ask me for my Sasha Studio URL and API key (I'll get these from My Account > API Tokens in Sasha Studio)
+> 5. Help me set up ngrok so Sasha can send callbacks to my machine:
+>    - Install ngrok if I don't have it (`brew install ngrok` on macOS)
+>    - Help me authenticate ngrok with my auth token
+>    - Help me claim a free static domain from the ngrok dashboard
+>    - Start the tunnel pointing to port 4000 (must match the server port)
+>    - IMPORTANT: The ngrok port number MUST be 4000 to match the demo server
+> 6. Update `.env` with my Sasha URL, API key, signing secret, and ngrok callback URL
+> 7. Start the server with: `node index.js`
+> 8. Open http://localhost:4000 in my browser
+> 9. Walk me through joining a meeting and verifying that live transcription events appear
+>
+> The repo is at: https://github.com/context-is-everything/sasha-meeting-api-client
+
+## Quick Start (Manual)
 
 ```bash
 git clone https://github.com/context-is-everything/sasha-meeting-api-client.git
@@ -38,7 +63,7 @@ cp .env.example .env    # Optional — you can enter credentials in the web UI
 node index.js
 ```
 
-Open **http://localhost:4000** in your browser. You'll see a form to enter your Sasha URL, API key, and a meeting URL. Click **Start Meeting** and watch events appear in the live feed as the meeting progresses.
+Open **http://localhost:4000** in your browser. You'll see a form to enter your Sasha URL, API key, and a meeting URL. Click **Join Meeting** and watch events appear in the live feed as the meeting progresses.
 
 ## How It Works
 
