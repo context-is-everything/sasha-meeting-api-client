@@ -1001,6 +1001,111 @@ The repo is at: https://github.com/context-is-everything/sasha-meeting-api-clien
         </div>
       </details>
 
+      <details style="margin-top:0.75rem" open>
+        <summary>Building a real application — persisting transcripts</summary>
+        <div style="padding-top:0.5rem">
+          <p>
+            This demo displays events in a browser. In a real application, you'd persist
+            them to a database so you can search, summarise, and build on top of your
+            meeting data. Here's how that architecture looks:
+          </p>
+          <pre style="font-size:0.75rem;line-height:1.5">
+┌──────────────────┐       ┌─────────────────────────┐     ┌──────────────────┐
+│  Sasha Server    │       │  Your Application       │     │  Database        │
+│                  │ HTTP  │                         │     │                  │
+│  Meeting bot  ──────POST──► POST /webhook          │     │  meetings        │
+│  transcribes     │ events│   ├─ Verify HMAC  ─────────INSERT► meeting_id   │
+│  live audio      │ (with │   ├─ Parse event        │     │   title, status  │
+│                  │ HMAC) │   └─ Save to DB  ──────────INSERT► started_at   │
+│                  │       │                         │     │                  │
+│                  │       │  Your frontend / API    │     │  segments        │
+│                  │       │   ├─ GET /meetings ◄───────SELECT─ speaker      │
+│                  │       │   ├─ GET /search   ◄───────SEARCH─ text         │
+│                  │       │   └─ GET /transcript◄──────SELECT─ timestamp    │
+└──────────────────┘       └─────────────────────────┘     └──────────────────┘</pre>
+
+          <h3>Suggested database schema</h3>
+          <p>Two tables cover most use cases — one for meetings, one for transcript segments:</p>
+          <pre>
+-- Track each meeting Sasha joins
+CREATE TABLE meetings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id   TEXT UNIQUE NOT NULL,
+    title        TEXT,
+    platform     TEXT,
+    status       TEXT DEFAULT 'joining',
+    started_at   DATETIME,
+    ended_at     DATETIME,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Store every finalized transcript segment
+CREATE TABLE segments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id   TEXT NOT NULL,
+    speaker      TEXT,
+    text         TEXT NOT NULL,
+    timestamp    DATETIME,
+    sequence     INTEGER,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_segments_meeting
+    ON segments(meeting_id, sequence);</pre>
+
+          <h3>Example: persist events in your callback handler</h3>
+          <p>Replace the event display logic with database writes:</p>
+          <pre>
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const rawBody = req.body.toString('utf8');
+  const sig = req.headers['x-sasha-signature'];
+
+  // 1. Verify the HMAC signature
+  if (!verifySignature(rawBody, sig, SIGNING_SECRET)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const event = JSON.parse(rawBody);
+
+  // 2. Persist based on event type
+  switch (event.type) {
+    case 'meeting_status':
+      db.prepare(\`
+        INSERT INTO meetings (meeting_id, status, platform, title, started_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(meeting_id) DO UPDATE SET status = ?
+      \`).run(event.meetingId, event.payload.status,
+             event.payload.platform, event.payload.title,
+             event.timestamp, event.payload.status);
+      break;
+
+    case 'segment_finalized':
+      db.prepare(\`
+        INSERT INTO segments (meeting_id, speaker, text, timestamp, sequence)
+        VALUES (?, ?, ?, ?, ?)
+      \`).run(event.meetingId, event.payload.speaker,
+             event.payload.text, event.payload.timestamp,
+             event.sequence);
+      break;
+  }
+
+  // 3. Always acknowledge quickly — Sasha retries on timeout
+  res.json({ received: true });
+});</pre>
+
+          <h3>What to build on top</h3>
+          <p>Once transcripts are in your database, you can:</p>
+          <ul style="padding-left:1.5rem;margin:0.5rem 0 0.75rem">
+            <li style="margin-bottom:0.35rem"><strong>Search across meetings</strong> — full-text search over all transcript segments</li>
+            <li style="margin-bottom:0.35rem"><strong>Generate summaries</strong> — feed transcripts to an LLM for meeting notes and action items</li>
+            <li style="margin-bottom:0.35rem"><strong>Track action items</strong> — extract and assign follow-ups from coaching insights</li>
+            <li style="margin-bottom:0.35rem"><strong>Build dashboards</strong> — meeting frequency, talk-time per participant, topic trends</li>
+            <li style="margin-bottom:0.35rem"><strong>Integrate with CRM</strong> — link meeting transcripts to customer records</li>
+            <li style="margin-bottom:0.35rem"><strong>Trigger workflows</strong> — automatically notify stakeholders when key topics are mentioned</li>
+          </ul>
+        </div>
+      </details>
+
       <details style="margin-top:0.75rem">
         <summary>Where do I find my API key and signing secret?</summary>
         <div style="padding-top:0.5rem">

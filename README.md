@@ -238,6 +238,123 @@ Every callback is an HTTP POST with a JSON body:
 | `participant_joined` | Someone joined the meeting |
 | `participant_left` | Someone left the meeting |
 
+## Building a Real Application
+
+This demo displays events in a browser — a real application would persist them to a database. Here's how that architecture looks:
+
+```
+┌──────────────────┐         ┌──────────────────────────┐       ┌──────────────────┐
+│  Sasha Server    │         │  Your Application        │       │  Database        │
+│                  │  HTTP   │                          │       │                  │
+│  Meeting bot ────────POST──►  POST /webhook           │       │  meetings        │
+│  transcribes     │  events │    ├─ Verify HMAC ──────────INSERT─►  meeting_id    │
+│  live audio      │  (with  │    ├─ Parse event        │       │    title         │
+│                  │  HMAC)  │    └─ Save to database ─────INSERT─►  status, ...   │
+│                  │         │                          │       │                  │
+│                  │         │  Your frontend / API     │       │  segments        │
+│                  │         │    ├─ GET /meetings ◄────────SELECT─  speaker        │
+│                  │         │    ├─ GET /search   ◄────────SEARCH─  text           │
+│                  │         │    └─ GET /transcript◄───────SELECT─  timestamp      │
+└──────────────────┘         └──────────────────────────┘       └──────────────────┘
+```
+
+### Suggested Database Schema
+
+Two tables cover most use cases — one for meetings, one for transcript segments:
+
+```sql
+-- Track each meeting Sasha joins
+CREATE TABLE meetings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id      TEXT UNIQUE NOT NULL,   -- from Sasha (e.g. "meeting_17234...")
+    title           TEXT,
+    platform        TEXT,                   -- "teams" or "google_meet"
+    status          TEXT DEFAULT 'joining',
+    callback_url    TEXT,
+    started_at      DATETIME,
+    ended_at        DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Store every finalized transcript segment
+CREATE TABLE segments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id      TEXT NOT NULL REFERENCES meetings(meeting_id),
+    speaker         TEXT,
+    text            TEXT NOT NULL,
+    timestamp       DATETIME,
+    sequence        INTEGER,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for fast lookups
+CREATE INDEX idx_segments_meeting ON segments(meeting_id, sequence);
+```
+
+You can extend this with tables for `participants`, `insights`, or `callback_deliveries` as needed.
+
+### Example: Persisting Events in Your Callback Handler
+
+Replace the event display logic with database writes:
+
+```javascript
+import Database from 'better-sqlite3';  // or any DB library
+
+const db = new Database('meetings.db');
+
+// In your callback handler:
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const rawBody = req.body.toString('utf8');
+  const sig = req.headers['x-sasha-signature'];
+
+  // 1. Verify the HMAC signature
+  if (!verifySignature(rawBody, sig, process.env.SIGNING_SECRET)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const event = JSON.parse(rawBody);
+
+  // 2. Persist based on event type
+  switch (event.type) {
+    case 'meeting_status':
+      db.prepare(`
+        INSERT INTO meetings (meeting_id, status, platform, title, started_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(meeting_id) DO UPDATE SET status = ?, ended_at = CASE WHEN ? IN ('ended','error') THEN CURRENT_TIMESTAMP ELSE ended_at END
+      `).run(
+        event.meetingId, event.payload.status, event.payload.platform,
+        event.payload.title, event.timestamp,
+        event.payload.status, event.payload.status
+      );
+      break;
+
+    case 'segment_finalized':
+      db.prepare(`
+        INSERT INTO segments (meeting_id, speaker, text, timestamp, sequence)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        event.meetingId, event.payload.speaker,
+        event.payload.text, event.payload.timestamp, event.sequence
+      );
+      break;
+  }
+
+  // 3. Always acknowledge quickly — Sasha retries on timeout
+  res.json({ received: true });
+});
+```
+
+### What to Build on Top
+
+Once transcripts are in your database, you can:
+
+- **Search across meetings** — full-text search over all transcript segments
+- **Generate summaries** — feed transcripts to an LLM for meeting notes and action items
+- **Track action items** — extract and assign follow-ups from coaching insights
+- **Build dashboards** — meeting frequency, talk-time per participant, topic trends
+- **Integrate with CRM** — link meeting transcripts to customer records
+- **Trigger workflows** — automatically notify stakeholders when key topics are mentioned
+
 ## HMAC Signature Verification
 
 Every callback includes an `X-Sasha-Signature` header. Verify it to ensure the event came from Sasha and hasn't been tampered with.
