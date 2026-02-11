@@ -250,7 +250,7 @@ async function safeResponseJson(response, sashaUrl) {
 
 /** POST /proxy/start — Join an existing meeting */
 app.post('/proxy/start', async (req, res) => {
-  const { sashaUrl, apiKey, meetingUrl, title, callbackUrl, signingSecret } = req.body;
+  const { sashaUrl, apiKey, meetingUrl, title, callbackUrl, signingSecret, project, saveTranscript } = req.body;
 
   // Update config from the form submission
   if (sashaUrl) config.sashaUrl = sashaUrl;
@@ -281,6 +281,8 @@ app.post('/proxy/start', async (req, res) => {
         url: meetingUrl,
         title: title || 'API Meeting',
         callbackUrl: effectiveCallbackUrl,
+        ...(project && { project }),
+        ...(saveTranscript === false && { saveTranscript: false }),
       }),
     });
   } catch (err) {
@@ -868,6 +870,20 @@ const HTML_PAGE = `<!DOCTYPE html>
           <input type="text" id="meeting-title" placeholder="Daily Standup">
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="project">Project <span style="font-weight:400;text-transform:none">(optional)</span></label>
+          <input type="text" id="project" placeholder="my-project">
+          <div class="hint">Associates transcript with a project (letters, numbers, hyphens, underscores)</div>
+        </div>
+        <div class="form-group" style="display:flex;flex-direction:column;justify-content:center">
+          <label style="display:flex;align-items:center;gap:0.5rem;text-transform:none;font-size:0.9rem;cursor:pointer">
+            <input type="checkbox" id="save-transcript" checked style="width:auto;margin:0">
+            Save Transcript
+          </label>
+          <div class="hint">Save transcript document to project folder on server</div>
+        </div>
+      </div>
       <div class="btn-row">
         <button class="btn-start" id="btn-start" onclick="startMeeting()">Join Meeting</button>
         <button class="btn-stop" id="btn-stop" onclick="stopMeeting()" disabled>Leave Meeting</button>
@@ -1247,6 +1263,8 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
       const title = document.getElementById('meeting-title').value.trim();
       const callbackUrl = document.getElementById('callback-url').value.trim();
       const signingSecret = document.getElementById('signing-secret').value.trim();
+      const project = document.getElementById('project').value.trim();
+      const saveTranscript = document.getElementById('save-transcript').checked;
 
       if (!sashaUrl) {
         addErrorEvent('Please enter your Sasha Studio URL (e.g. https://your-instance.sliplane.app).');
@@ -1264,11 +1282,15 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
         return;
       }
 
-      showApiCall('POST', sashaUrl + '/api/v1/meetings/start', {
+      const apiBody = {
         url: meetingUrl,
         title: title || 'API Meeting',
         callbackUrl: callbackUrl || 'http://localhost:${PORT}/events',
-      });
+      };
+      if (project) apiBody.project = project;
+      if (!saveTranscript) apiBody.saveTranscript = false;
+
+      showApiCall('POST', sashaUrl + '/api/v1/meetings/start', apiBody);
 
       document.getElementById('btn-start').disabled = true;
       setStatus('active', 'Joining meeting...');
@@ -1277,7 +1299,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
         const res = await fetch('/proxy/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sashaUrl, apiKey, meetingUrl, title, callbackUrl, signingSecret }),
+          body: JSON.stringify({ sashaUrl, apiKey, meetingUrl, title, callbackUrl, signingSecret, project, saveTranscript }),
         });
 
         const data = await res.json();
@@ -1294,9 +1316,13 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
         document.getElementById('btn-stop').disabled = false;
         document.getElementById('btn-start').disabled = false;
 
+        const responsePayload = { action: 'Joining meeting', meetingId: data.meetingId, platform: data.platform };
+        if (data.project) responsePayload.project = data.project;
+        if (data.documentPath) responsePayload.documentPath = data.documentPath;
+
         addEvent({
           type: 'api_response',
-          payload: { action: 'Joining meeting', meetingId: data.meetingId, platform: data.platform },
+          payload: responsePayload,
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
